@@ -1,32 +1,25 @@
 # Name of your workflow
 name: Create Release
 
-# This workflow runs when a new tag is pushed that matches the pattern 'v*.*.*'
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+' # Matches tags like v1.0.0, v0.2.1, etc.
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
-# Add permissions for the GITHUB_TOKEN to create a release
 permissions:
   contents: write
 
 jobs:
-  # The 'build' job is almost identical to your CI build, but for a release
-  build:
+  build-native:
     strategy:
       matrix:
-        # Define the OSs and target triples for Rust
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary-name: file_sorter
           - os: macos-latest
             target: x86_64-apple-darwin
-            binary-name: file_sorter
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary-name: file_sorter.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -43,40 +36,52 @@ jobs:
       - name: Build release executable
         run: cargo build --release --target ${{ matrix.target }} --verbose
 
-      - name: Package the binary for release
-        # This step renames the binary to include the target triple, making it clear
-        # which file is for which OS/architecture.
+      - name: Package for Release
+        shell: bash
         run: |
+          # Determine binary name and archive extension based on OS
+          BINARY_NAME="file_sorter"
+          ARCHIVE_EXT=""
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            BINARY_NAME="file_sorter.exe"
+            ARCHIVE_EXT="zip"
+          else
+            ARCHIVE_EXT="tar.gz"
+          fi
+
+          # Define the asset name
+          ASSET_NAME="file_sorter-${{ github.ref_name }}-${{ matrix.target }}"
+          
+          # Navigate to the directory containing the binary
           cd target/${{ matrix.target }}/release
-          mv ${{ matrix.binary-name }} file_sorter-${{ matrix.target }}
-          cd -
+
+          # Create the archive
+          if [ "$ARCHIVE_EXT" = "zip" ]; then
+            powershell Compress-Archive -Path "$BINARY_NAME" -DestinationPath "../../../${ASSET_NAME}.zip"
+          else
+            tar -czf "../../../${ASSET_NAME}.tar.gz" "$BINARY_NAME"
+          fi
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: file_sorter-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/file_sorter-${{ matrix.target }}
-
-  # The 'release' job creates the GitHub release after all builds are successful
+          path: |
+            *.zip
+            *.tar.gz
   release:
-    # This job depends on the 'build' job, it will only run if all builds succeed
-    needs: build
+    needs: [build-native]
     runs-on: ubuntu-latest
-
     steps:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          # The destination directory for the downloaded artifacts
           path: artifacts
 
       - name: Create GitHub Release
-        # This popular action creates a release and uploads the files
         uses: softprops/action-gh-release@v2
         with:
-          # The GITHUB_TOKEN is automatically provided by GitHub Actions
           token: ${{ secrets.GITHUB_TOKEN }}
-          # The files to upload as release assets. The wildcard matches all artifacts.
+          # The glob pattern now looks for the archive files
           files: artifacts/**/*
-          # The body of the release. You can customize this.
-          body: "Automated release of file_sorter. Binaries for Windows, macOS, and Linux are attached below."
+          body: "Automated release of file_sorter. Packaged binaries for Windows, macOS, Linux, and Arch Linux are attached below."
